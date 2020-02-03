@@ -1,0 +1,71 @@
+### Basic start
+# connect on Azure subscription
+Connect-AzAccount
+
+# see your subscriptions available
+get-azsubscription
+
+# set your right subscription
+get-azsubscription -SubscriptionName "your subscription name"
+
+# encrypt your disk (this example take in consideration you will create a new keyvault and key, and also a new vm to have its disk encrypted)
+# in case you have any of those resources already created, you will just need to point out the right name and replace some ps variables
+
+## make sure to replace all the variable names in the script below
+
+# 1. creating the resource group and registering the provider
+
+$rgName = "myResourceGroup"
+$location = "East US"
+
+Register-AzResourceProvider -ProviderNamespace "Microsoft.KeyVault"
+New-AzResourceGroup -Location $location -Name $rgName
+
+# 2. creating the key vault
+
+$keyVaultName = "myKeyVault$(Get-Random)"
+New-AzKeyVault -Location $location `
+    -ResourceGroupName $rgName `
+    -VaultName $keyVaultName `
+    -EnabledForDiskEncryption
+
+# in case you got a warning about "not have permission" or that you are "not authorized" to use the keyvault, take in consideration to run that command below to set the security policy:
+Set-AzKeyVaultAccessPolicy -VaultName '$keyVaultName' -UserPrincipalName 'rudneir2@outlook.com' -PermissionsToKeys create,import,delete,list -PermissionsToSecrets set,delete -PassThru
+
+# 3. creating the key
+
+Add-AzKeyVaultKey -VaultName $keyVaultName `
+    -Name "myKey" `
+    -Destination "Software"
+
+# 4. creating the VM, in case you don't have it
+
+$cred = Get-Credential
+
+New-AzVm `
+    -ResourceGroupName $rgName `
+    -Name "myVM" `
+    -Location $location `
+    -VirtualNetworkName "myVnet" `
+    -SubnetName "mySubnet" `
+    -SecurityGroupName "myNetworkSecurityGroup" `
+    -PublicIpAddressName "myPublicIpAddress" `
+    -Credential $cred
+
+## 5. AND FINALLY, encrypt your VM disk
+
+$keyVault = Get-AzKeyVault -VaultName $keyVaultName -ResourceGroupName $rgName;
+$diskEncryptionKeyVaultUrl = $keyVault.VaultUri;
+$keyVaultResourceId = $keyVault.ResourceId;
+$keyEncryptionKeyUrl = (Get-AzKeyVaultKey -VaultName $keyVaultName -Name myKey).Key.kid;
+
+Set-AzVMDiskEncryptionExtension -ResourceGroupName $rgName `
+    -VMName "myVM" `
+    -DiskEncryptionKeyVaultUrl $diskEncryptionKeyVaultUrl `
+    -DiskEncryptionKeyVaultId $keyVaultResourceId `
+    -KeyEncryptionKeyUrl $keyEncryptionKeyUrl `
+    -KeyEncryptionKeyVaultId $keyVaultResourceId
+
+# 6. Certify that your disk is encrypted
+
+Get-AzVmDiskEncryptionStatus  -ResourceGroupName $rgName -VMName "myVM"
